@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PATCO Scheduler</title>
+    <style>
+        :root {
+            --primary: #d32f2f;
+            --bg: #f5f5f5;
+            --card-bg: #ffffff;
+            --text: #333;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: var(--card-bg);
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+        }
+
+        h1 {
+            text-align: center;
+            color: var(--primary);
+            margin-top: 0;
+        }
+
+        .controls {
+            display: grid;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        select,
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        #results {
+            margin-top: 24px;
+        }
+
+        .train-card {
+            border-bottom: 1px solid #eee;
+            padding: 12px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .train-card.next-train {
+            background-color: #ffebee;
+            border-left: 4px solid var(--primary);
+            padding-left: 12px;
+            margin: -1px -16px 0 -16px;
+            /* Bleed out */
+            padding-right: 16px;
+        }
+
+        .train-time {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .train-duration {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .error {
+            color: var(--primary);
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>PATCO Scheduler</h1>
+
+        <div class="controls">
+            <div>
+                <label for="date">Date</label>
+                <input type="date" id="date">
+            </div>
+            <div>
+                <label for="from-station">From</label>
+                <select id="from-station"></select>
+            </div>
+            <div>
+                <label for="to-station">To</label>
+                <select id="to-station"></select>
+            </div>
+        </div>
+
+        <div id="results">
+            <div class="loading">Loading schedule...</div>
+        </div>
+    </div>
+
+    <script>
+        const STATIONS = [
+            "Lindenwold", "Ashland", "Woodcrest", "Haddonfield", "Westmont", "Collingswood",
+            "Ferry Avenue", "Broadway", "City Hall", "Franklin Square",
+            "8th & Market", "9/10th & Locust", "12/13th & Locust", "15/16th & Locust"
+        ];
+        let scheduleData = null;
+        const dateInput = document.getElementById('date');
+        dateInput.valueAsDate = new Date();
+
+        const fromSelect = document.getElementById('from-station');
+        const toSelect = document.getElementById('to-station');
+
+        STATIONS.forEach(s => {
+            fromSelect.add(new Option(s, s));
+            toSelect.add(new Option(s, s));
+        });
+
+        fromSelect.value = "Lindenwold";
+        toSelect.value = "8th & Market";
+
+        function init() {
+            if (!scheduleData) {
+                fetch('schedule.json')
+                    .then(r => r.json())
+                    .then(d => {
+                        console.warn("Using fetch fallback");
+                        scheduleData = d;
+                        updateSchedule();
+                    })
+                    .catch(e => {
+                        document.getElementById('results').innerHTML = '<div class="error">Schedule data not loaded. Please run build.py</div>';
+                    });
+            } else {
+                updateSchedule();
+            }
+        }
+
+        function getScheduleType(date) {
+            const day = date.getDay(); // 0 = Sun, 6 = Sat
+            if (day === 0) return "sunday";
+            if (day === 6) return "saturday";
+            return "weekday";
+        }
+
+        function formatTime(mins) {
+            if (mins == null) return "-";
+            let h = Math.floor(mins / 60);
+            let m = mins % 60;
+            const ampm = h >= 12 && h < 24 ? "PM" : "AM";
+            if (h >= 24) { h -= 24; } // late night overflow
+            if (h > 12) h -= 12;
+            if (h === 0) h = 12;
+            return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
+        }
+
+        function updateSchedule() {
+            if (!scheduleData) return;
+
+            const dateStr = dateInput.value;
+            if (!dateStr) return;
+
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const date = new Date(y, m - 1, d);
+
+            const fromVal = fromSelect.value;
+            const toVal = toSelect.value;
+
+            if (fromVal === toVal) {
+                document.getElementById('results').innerHTML = '<div class="error">Select different stations</div>';
+                return;
+            }
+
+            const fromIdx = STATIONS.indexOf(fromVal);
+            const toIdx = STATIONS.indexOf(toVal);
+            const direction = fromIdx < toIdx ? "westbound" : "eastbound";
+            const dayType = getScheduleType(date);
+
+            const trains = scheduleData[dayType][direction];
+
+            const options = trains.map(t => {
+                const dep = t[fromVal];
+                const arr = t[toVal];
+                if (dep != null && arr != null) {
+                    return { dep, arr, duration: arr - dep };
+                }
+                return null;
+            }).filter(t => t !== null);
+
+            options.sort((a, b) => a.dep - b.dep);
+
+            const now = new Date();
+            const isToday = now.toDateString() === date.toDateString();
+            const currentMins = now.getHours() * 60 + now.getMinutes();
+
+            let html = `<h3>${dayType.toUpperCase()} Schedule (${direction})</h3>`;
+
+            if (options.length === 0) {
+                html += '<div class="error">No direct trains found.</div>';
+            } else {
+                let foundNext = false;
+                options.forEach(opt => {
+                    let isNext = false;
+                    if (isToday && !foundNext && opt.dep > currentMins) {
+                        isNext = true;
+                        foundNext = true;
+                    }
+
+                    html += `
+                    <div class="train-card ${isNext ? 'next-train' : ''}">
+                        <div>
+                            <div class="train-time">${formatTime(opt.dep)} &rarr; ${formatTime(opt.arr)}</div>
+                            ${isNext ? '<small style="color:var(--primary)"><b>Up Next</b></small>' : ''}
+                        </div>
+                        <div class="train-duration">${opt.duration} min</div>
+                    </div>
+                `;
+                });
+            }
+
+            document.getElementById('results').innerHTML = html;
+        }
+
+        dateInput.addEventListener('change', updateSchedule);
+        fromSelect.addEventListener('change', updateSchedule);
+        toSelect.addEventListener('change', updateSchedule);
+
+
+        init();
+    </script>
+
+</body>
+
+</html>
